@@ -1,7 +1,19 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from datetime import datetime, timezone
+from sqlalchemy.orm import Session
+import models, database
 
 app = FastAPI()
+
+models.Base.metadata.create_all(bind=database.engine)
+
+# --- DATABASE DEPENDENCY ---
+def get_db():
+    db = database.SessionLocal()
+    try:
+        yield db # Hand over the session to the function that needs it
+    finally:
+        db.close() # Clean up / close the session after the function is done
 
 time_zones = {
     "GMT-12:00": "AoE (Anywhere on Earth)",
@@ -56,8 +68,9 @@ def home():
     return {"message": "Welcome to the Timezone API. Go to /docs to test it."}
 
 @app.get("/find-timezone")
-def find_timezone(user_hour: int, user_minute: int):
-    # 1. Validation (Replacing your 'Invalid time format' print)
+def find_timezone(user_hour: int, user_minute: int, db: Session = Depends(get_db)):
+
+    # 1. Validation
     if not (0 <= user_hour <= 23) or not (0 <= user_minute <= 59):
         raise HTTPException(status_code=400, detail="Time must be HH:MM in 24hr format")
 
@@ -75,7 +88,6 @@ def find_timezone(user_hour: int, user_minute: int):
         tm -= 60
         th += 1
 
-    # Normalize logic
     if th > 14:
         th -= 24
     elif th < -12:
@@ -83,14 +95,30 @@ def find_timezone(user_hour: int, user_minute: int):
 
     # 4. Format the key
     sign = "+" if th >= 0 else "" 
-    # Use :02 to ensure single digits get a leading zero (e.g., 5 -> 05)
     key = f"GMT{sign}{th}:{tm:02}" 
 
     # 5. Result
     found_zone = time_zones.get(key, "Unknown Time Zone")
     
+    # --- DATABASE SAVING LOGIC ---
+    # Create the Python Object (The row)
+    new_log = models.Log(
+        input_time=f"{user_hour}:{user_minute:02}",
+        location=found_zone
+    )
+    
+    # Add to the "staging area"
+    db.add(new_log)
+    
+    # Commit (Save firmly to the file)
+    db.commit()
+    
+    # Refresh (Update the object with the ID the DB assigned it)
+    db.refresh(new_log)
+    
     return {
-        "input_time": f"{user_hour}:{user_minute:02}",
+        "id": new_log.id, # We can now return the DB ID!
+        "input_time": new_log.input_time,
         "calculated_offset": key,
-        "location": found_zone
+        "location": new_log.location
     }
