@@ -122,3 +122,11 @@ def find_timezone(user_hour: int, user_minute: int, db: Session = Depends(get_db
         "calculated_offset": key,
         "location": new_log.location
     }
+
+@app.get("/logs")
+def get_logs(db: Session = Depends(get_db)):
+    # 1. Query the database
+    logs = db.query(models.Log).all()
+    
+    # 2. Return the list of logs
+    return logs
